@@ -213,6 +213,14 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // Usage windows (5-hour / weekly / cloud minutes) in the same shape the
+    // official usage overlay shows, so a dashboard can mirror it.
+    if (path === "/v1/usage" && req.method === "GET") {
+      requireApiKey(req);
+      json(res, 200, await usageSnapshot());
+      return;
+    }
+
     if (path === "/v1/chat/completions" && req.method === "POST") {
       const keyRecord = requireApiKey(req);
       await handleOpenAIChat(req, res, keyRecord);
@@ -323,6 +331,55 @@ async function handleResponses(req, res, keyRecord) {
   } finally {
     prepared.release();
   }
+}
+
+// -------------------------------------------------------------------- usage
+
+/**
+ * Per-account usage windows plus an aggregate.
+ *
+ * `windows.fiveHour` and `windows.weekly` are the rate-limit windows Command
+ * Code meters; `sandbox` is the monthly cloud-minute allowance. Percentages and
+ * reset timestamps are included so a UI can draw the same meters as the site.
+ */
+const USAGE_TTL_MS = 60 * 1000;
+let usageCache = { at: 0, body: null };
+
+async function usageSnapshot({ force = false } = {}) {
+  if (!force && usageCache.body && Date.now() - usageCache.at < USAGE_TTL_MS) {
+    return usageCache.body;
+  }
+
+  const accounts = store.listAccounts().filter((a) => a.enabled);
+  const details = await Promise.all(
+    accounts.map(async (account) => {
+      try {
+        const { usage } = await relay.refreshCredits(account.id);
+        return { account: account.name, ...usage };
+      } catch (error) {
+        return { account: account.name, available: false, errors: [error?.message ?? String(error)] };
+      }
+    }),
+  );
+
+  // The tightest window across accounts is what actually throttles requests.
+  const tightest = (key) => {
+    const windows = details.map((d) => d.windows?.[key]).filter(Boolean);
+    if (!windows.length) return null;
+    return windows.reduce((worst, w) => (w.percent > worst.percent ? w : worst));
+  };
+
+  const body = {
+    now: Date.now(),
+    accounts: details,
+    windows: {
+      limited: details.some((d) => d.windows?.limited === true),
+      fiveHour: tightest("fiveHour"),
+      weekly: tightest("weekly"),
+    },
+  };
+  usageCache = { at: Date.now(), body };
+  return body;
 }
 
 // ------------------------------------------------------------------ balance

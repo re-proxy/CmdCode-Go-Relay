@@ -3,7 +3,7 @@ import { config } from "./config.mjs";
 import { fetchCredits, getCatalog, openGenerate, resolveModel, whoami, UpstreamError } from "./upstream.mjs";
 import { pumpStream } from "./wire.mjs";
 import { HttpError } from "./convert.mjs";
-import { summarizeCredits } from "./credits.mjs";
+import { summarizeCredits, summarizeUsage } from "./credits.mjs";
 
 /**
  * Ties one client request to one pooled account.
@@ -233,21 +233,46 @@ export class Relay {
     }
   }
 
+  /**
+   * Pulls the credit windows, the plan and the billing-period spend for one
+   * account, and stores the normalized view the console renders.
+   */
   async refreshCredits(id) {
     if (!id) throw new HttpError(400, "`id` is required", { code: "missing_account_id" });
     const credential = this.store.getAccountCredential(id);
     if (!credential) throw new HttpError(404, "Account not found", { code: "account_not_found" });
     const account = this.store.getAccount(id);
     const data = await fetchCredits(credential, account?.orgId ?? null);
-    if (!account?.orgId && data.credits?.orgId) {
-      this.store.updateAccount(id, { orgId: data.credits.orgId });
+
+    if (!account?.orgId && data.orgId) {
+      this.store.updateAccount(id, { orgId: data.orgId });
     }
+
     const summary = summarizeCredits(data);
+    const usage = summarizeUsage(data, { studioBase: config.studioBase });
     this.store.updateAccount(id, {
       credits: summary,
+      usage,
+      usageCheckedAt: new Date().toISOString(),
       creditsCheckedAt: new Date().toISOString(),
+      // A working usage read also proves the credential is still accepted.
+      needsReauth: false,
     });
-    return { summary, raw: data };
+    return { summary, usage, raw: data };
+  }
+
+  /** Refreshes every enabled account; failures are reported per account. */
+  async refreshAllUsage() {
+    const results = [];
+    for (const account of this.store.listAccounts()) {
+      try {
+        const { usage } = await this.refreshCredits(account.id);
+        results.push({ id: account.id, name: account.name, ok: usage?.available === true });
+      } catch (error) {
+        results.push({ id: account.id, name: account.name, ok: false, error: error?.message ?? String(error) });
+      }
+    }
+    return results;
   }
 }
 

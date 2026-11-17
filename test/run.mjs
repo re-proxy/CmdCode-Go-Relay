@@ -609,6 +609,49 @@ async function main() {
       check("credits without an account id is a 400", res.status === 400, `got ${res.status}`);
     }
 
+    // --- usage windows ------------------------------------------------------
+    {
+      // A refresh populates the stored view; /v1/usage reads it back.
+      const overview = await (await fetch(`${base}/admin/api/overview`, { headers: adminHeaders })).json();
+      const target = overview.accounts[0];
+      const refreshed = await fetch(`${base}/admin/api/accounts/credits`, {
+        method: "POST",
+        headers: adminHeaders,
+        body: JSON.stringify({ id: target.id }),
+      });
+      const body = await refreshed.json();
+      check("usage refresh succeeds", refreshed.status === 200, `got ${refreshed.status}`);
+      const u = body.usage;
+      check("usage names the plan", u?.planName === "Go", JSON.stringify(u?.planName));
+      check("usage reports the 5-hour window", u?.windows?.fiveHour?.cap === 100 && u.windows.fiveHour.used === 30, JSON.stringify(u?.windows?.fiveHour));
+      check("usage derives the 5-hour percentage", Math.round(u?.windows?.fiveHour?.percent) === 30, String(u?.windows?.fiveHour?.percent));
+      check("usage carries the window reset time", typeof u?.windows?.fiveHour?.resetAt === "number", String(u?.windows?.fiveHour?.resetAt));
+      check("usage reports the weekly window", u?.windows?.weekly?.cap === 1000, JSON.stringify(u?.windows?.weekly));
+      check("usage flags that limits are active", u?.windows?.limited === true, String(u?.windows?.limited));
+      check("usage reports cloud minutes as the monthly allowance", u?.sandbox?.limitMinutes === 60 && u.sandbox.usedMinutes === 12, JSON.stringify(u?.sandbox));
+      check("usage reports requests for the period", u?.requests === 42, String(u?.requests));
+      // Go grants 10 credits; 1 was bought; 4.5 monthly remain => pool 11, used 50%.
+      check("usage computes the overall bar from the plan allowance", Math.round(u?.credits?.usagePercent ?? -1) === 50, JSON.stringify(u?.credits));
+      check("usage reports the plan pool", u?.credits?.totalPool === 11, JSON.stringify(u?.credits));
+      check("usage links to the official breakdown", /tester\/settings\/usage$/.test(u?.usageUrl ?? ""), u?.usageUrl);
+
+      const api = await fetch(`${base}/v1/usage`, { headers: authHeaders });
+      const snapshot = await api.json();
+      check("GET /v1/usage returns a snapshot", api.status === 200 && Array.isArray(snapshot.accounts), `got ${api.status}`);
+      check("/v1/usage exposes the tightest 5-hour window", snapshot.windows?.fiveHour?.cap === 100, JSON.stringify(snapshot.windows?.fiveHour));
+      check("/v1/usage exposes the tightest weekly window", snapshot.windows?.weekly?.cap === 1000, JSON.stringify(snapshot.windows?.weekly));
+      check("/v1/usage marks the limit state", snapshot.windows?.limited === true);
+
+      const adminUsage = await fetch(`${base}/admin/api/usage`, { headers: adminHeaders });
+      const stored = await adminUsage.json();
+      const entry = stored.accounts.find((a) => a.id === target.id);
+      check("admin usage returns the stored view", entry?.usage?.windows?.weekly?.cap === 1000, JSON.stringify(entry?.usage?.windows));
+
+      const all = await fetch(`${base}/admin/api/usage/refresh`, { method: "POST", headers: adminHeaders, body: "{}" });
+      const allBody = await all.json();
+      check("refreshing every account reports per-account results", all.status === 200 && allBody.results.every((r) => r.ok), JSON.stringify(allBody.results));
+    }
+
     // --- unknown model ------------------------------------------------------
     {
       const res = await fetch(`${base}/v1/chat/completions`, {

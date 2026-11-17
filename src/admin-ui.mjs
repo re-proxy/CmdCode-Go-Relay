@@ -117,6 +117,7 @@ function render() {
   app.innerHTML = renderShell();
   bindShell();
   if (state.tab === "accounts") renderAccounts();
+  if (state.tab === "quota") { state.quota = null; renderQuota(); }
   if (state.tab === "models") renderModels();
   if (state.tab === "keys") renderKeys();
   if (state.tab === "usage") renderUsage();
@@ -146,7 +147,7 @@ function bindLogin() {
 }
 
 function renderShell() {
-  const tabs = [["accounts", "账号"], ["models", "模型"], ["keys", "API 接入"], ["usage", "使用记录"]];
+  const tabs = [["accounts", "账号"], ["quota", "用量"], ["models", "模型"], ["keys", "API 接入"], ["usage", "请求记录"]];
   return '<header><h1>Command Code Relay</h1>'
     + '<span class="spacer"></span>'
     + tabs.map(([id, label]) => '<button class="ghost' + (state.tab === id ? " primary" : "") + '" data-tab="' + id + '">' + label + '</button>').join("")
@@ -154,6 +155,7 @@ function renderShell() {
     + '<button class="ghost" id="logout">退出</button></header>'
     + '<main>'
     + '<section id="secAccounts" class="' + (state.tab === "accounts" ? "" : "hidden") + '"></section>'
+    + '<section id="secQuota" class="' + (state.tab === "quota" ? "" : "hidden") + '"></section>'
     + '<section id="secModels" class="' + (state.tab === "models" ? "" : "hidden") + '"></section>'
     + '<section id="secKeys" class="' + (state.tab === "keys" ? "" : "hidden") + '"></section>'
     + '<section id="secUsage" class="' + (state.tab === "usage" ? "" : "hidden") + '"></section>'
@@ -509,6 +511,148 @@ function renderKeys() {
   const body = $("#keyRows");
   if (body) body.innerHTML = keyRows();
   bindKeyRowActions();
+}
+
+// ---------------------------------------------------------------- 用量视图
+
+// Same thresholds the official overlay uses: green under 50, yellow under 80,
+// red above.
+function usageTone(percent) {
+  if (percent >= 80) return "b-err";
+  if (percent >= 50) return "b-warn";
+  return "b-ok";
+}
+
+function usageBar(percent) {
+  const pct = Math.max(0, Math.min(100, Number(percent) || 0));
+  return '<div class="bar"><i style="width:' + pct.toFixed(1) + '%"></i></div>';
+}
+
+// Mirrors the CLI's formatDuration: "2d 3h", "5h 12m", "18m".
+function formatCountdown(resetAt) {
+  if (!resetAt) return "";
+  const ms = Number(resetAt) - Date.now();
+  if (!Number.isFinite(ms) || ms <= 0) return "即将重置";
+  const minutes = Math.max(1, Math.ceil(ms / 60000));
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  const mins = minutes % 60;
+  if (days > 0) return hours > 0 ? days + "天 " + hours + "小时" : days + "天";
+  if (hours > 0) return mins > 0 ? hours + "小时 " + mins + "分" : hours + "小时";
+  return mins + "分";
+}
+
+function windowMeter(label, window) {
+  if (!window) {
+    return '<div class="row" style="justify-content:space-between"><span class="muted small">' + esc(label)
+      + '</span><span class="muted small">上游未提供</span></div>';
+  }
+  const pct = Math.round(window.percent ?? 0);
+  const countdown = window.resetAt ? ' · ' + formatCountdown(window.resetAt) + '后重置' : '';
+  return '<div class="stack" style="gap:6px">'
+    + '<div class="row" style="justify-content:space-between">'
+    + '<span class="small">' + esc(label) + '</span>'
+    + '<span class="badge ' + usageTone(pct) + '">' + pct + '%</span>'
+    + '</div>'
+    + usageBar(pct)
+    + '<div class="muted small">已用 ' + fmt(window.used) + ' / ' + fmt(window.cap) + esc(countdown) + '</div>'
+    + '</div>';
+}
+
+function quotaCard(entry) {
+  const u = entry.usage;
+  if (!u || !u.available) {
+    const reason = u?.errors?.length ? u.errors.join("; ") : "还没有拉取过用量";
+    return '<div class="card"><div class="row" style="justify-content:space-between">'
+      + '<h3>' + esc(entry.account) + '</h3>'
+      + '<button data-quota="refresh" data-id="' + entry.id + '">拉取用量</button></div>'
+      + '<p style="margin-top:8px">' + esc(reason) + '</p></div>';
+  }
+
+  const c = u.credits ?? {};
+  const overall = Math.round(c.usagePercent ?? 0);
+  const renew = u.daysLeft === null || u.daysLeft === undefined
+    ? ""
+    : u.daysLeft === 0 ? " · 今天续费" : " · " + u.daysLeft + " 天后续费";
+  const requests = u.requests === null || u.requests === undefined
+    ? ""
+    : fmt(u.requests) + (u.periodBasis === "billing-period" ? " 次请求（本月）" : " 次请求");
+
+  return '<div class="card"><div class="stack" style="gap:12px">'
+    + '<div class="row" style="justify-content:space-between">'
+    + '<h3>' + esc(entry.account) + '</h3>'
+    + '<div class="row"><span class="badge b-muted">' + esc(u.planName || u.planId || "未知套餐") + '</span>'
+    + (u.status ? '<span class="badge ' + (u.status === "active" ? "b-ok" : "b-warn") + '">' + esc(u.status) + '</span>' : '')
+    + '<button data-quota="refresh" data-id="' + entry.id + '">刷新</button></div></div>'
+    + '<div class="stack" style="gap:6px">'
+    + '<div class="row" style="justify-content:space-between"><span class="small">积分</span>'
+    + '<span class="badge ' + usageTone(overall) + '">' + overall + '% 已用</span></div>'
+    + usageBar(overall)
+    + '<div class="muted small">剩余 ' + money(c.totalRemaining) + ' / 总额 ' + money(c.totalPool)
+    + (u.extraCredits > 0 ? ' · 额外积分 ' + money(u.extraCredits) : '')
+    + esc(requests) + esc(renew) + '</div></div>'
+    + '<div class="stack" style="gap:10px;margin-top:4px">'
+    + '<div class="muted small" style="text-transform:uppercase;letter-spacing:.06em">用量窗口</div>'
+    + windowMeter("5 小时", u.windows?.fiveHour)
+    + windowMeter("每周", u.windows?.weekly)
+    + (u.sandboxAccess && u.sandbox ? windowMeter("本月云分钟", u.sandbox) : "")
+    + '</div>'
+    + (u.usageUrl ? '<p class="small"><a href="' + esc(u.usageUrl) + '" target="_blank" rel="noopener">在官网查看完整明细</a></p>' : '')
+    + '</div></div>';
+}
+
+async function ensureQuota() {
+  if (state.quota) return;
+  try {
+    state.quota = await api("/admin/api/usage");
+  } catch (err) {
+    toast(err.message, "err");
+    state.quota = { accounts: [] };
+  }
+}
+
+async function renderQuota() {
+  const sec = $("#secQuota");
+  if (!state.quota) sec.innerHTML = '<h2>用量</h2><div class="pad muted">加载中…</div>';
+  await ensureQuota();
+  const entries = state.quota?.accounts ?? [];
+
+  sec.innerHTML = '<h2>用量<span class="spacer"></span><button id="refreshAllQuota">全部刷新</button></h2>'
+    + '<div class="pad"><p class="small muted" style="margin-top:0">'
+    + '按官网口径显示：积分是账单周期的总额度，5 小时与每周是限流窗口，云分钟是月度沙箱额度。'
+    + '「刷新」才会请求上游，平时只显示上次结果。</p>'
+    + '<div class="grid">' + (entries.length ? entries.map(quotaCard).join("") : '<div class="card"><p>还没有账号</p></div>')
+    + '</div></div>';
+
+  $("#refreshAllQuota").onclick = async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try {
+      await api("/admin/api/usage/refresh", { method: "POST", body: {} });
+      state.quota = null;
+      await renderQuota();
+      toast("用量已刷新");
+    } catch (err) {
+      toast(err.message, "err");
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  sec.querySelectorAll('[data-quota="refresh"]').forEach((btn) => {
+    btn.onclick = async () => {
+      btn.disabled = true;
+      try {
+        await api("/admin/api/accounts/credits", { method: "POST", body: { id: btn.dataset.id } });
+        state.quota = null;
+        await renderQuota();
+      } catch (err) {
+        toast(err.message, "err");
+      } finally {
+        btn.disabled = false;
+      }
+    };
+  });
 }
 
 function usageRows() {

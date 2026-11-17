@@ -108,6 +108,39 @@ const fetchStub = async (path, options = {}) => {
       pool: [],
     });
   }
+  if (path === "/admin/api/usage") {
+    return ok({
+      accounts: [
+        {
+          id: "acc1",
+          account: "main",
+          enabled: true,
+          usageCheckedAt: "2026-01-01T00:00:00Z",
+          usage: {
+            available: true,
+            planId: "individual-go",
+            planName: "Go",
+            status: "active",
+            daysLeft: 12,
+            requests: 42,
+            totalCost: 5.5,
+            credits: { monthlyRemaining: 4.5, purchasedRemaining: 1, freeRemaining: 0, totalRemaining: 5.5, totalSpent: 5.5, totalPool: 11, usagePercent: 50, hasCreditsInfo: true },
+            extraCredits: 1,
+            windows: {
+              limited: true,
+              fiveHour: { used: 30, cap: 100, percent: 30, resetAt: Date.now() + 5400000 },
+              weekly: { used: 220, cap: 1000, percent: 22, resetAt: Date.now() + 259200000 },
+            },
+            sandbox: { usedMinutes: 12, limitMinutes: 60, percent: 20, resetAt: Date.now() + 1728000000 },
+            sandboxAccess: true,
+            orgLimits: [],
+            usageUrl: "https://commandcode.ai/tester/settings/usage",
+            errors: [],
+          },
+        },
+      ],
+    });
+  }
   if (path === "/admin/api/models") {
     return ok({
       prefs: {},
@@ -169,7 +202,7 @@ try {
   check("admin script only talks to the admin API", requests.every((r) => r.path.startsWith("/admin/api/")));
 
   // Tab switching exercises every render path with real payloads.
-  for (const tab of ["models", "keys", "usage", "accounts"]) {
+  for (const tab of ["models", "keys", "usage", "quota", "accounts"]) {
     try {
       context.__switchTab(tab);
       await new Promise((r) => setTimeout(r, 20));

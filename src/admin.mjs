@@ -191,6 +191,26 @@ async function adminApi({ req, res, path, store, relay, pool, loginBroker, clien
     return;
   }
 
+  // Stored snapshot only; refreshing is a separate, explicit call so the
+  // console's polling never turns into upstream requests.
+  if (path === "/admin/api/usage" && req.method === "GET") {
+    const accounts = store.listAccounts().map((a) => ({
+      id: a.id,
+      account: a.name,
+      enabled: a.enabled,
+      usageCheckedAt: a.usageCheckedAt ?? null,
+      usage: a.usage ?? null,
+    }));
+    json(res, 200, { accounts });
+    return;
+  }
+
+  if (path === "/admin/api/usage/refresh" && req.method === "POST") {
+    const results = await relay.refreshAllUsage();
+    json(res, 200, { results });
+    return;
+  }
+
   if (path === "/admin/api/accounts/credits" && req.method === "POST") {
     const body = await readBody(req);
     const result = await relay.refreshCredits(body?.id);

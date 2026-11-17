@@ -290,18 +290,43 @@ export async function whoami(apiKey) {
 }
 
 /** Reads plan/credit information for an account. Best effort. */
-export async function fetchCredits(apiKey, orgId) {
-  const query = orgId ? `?orgId=${encodeURIComponent(orgId)}` : "";
+/**
+ * Everything the usage view needs: the org (with its limits), the credit
+ * windows, the subscription, and the billing-period spend summary.
+ *
+ * The summary is keyed off the subscription's period start, which is how the
+ * official overlay scopes "requests this month".
+ */
+export async function fetchCredits(apiKey, knownOrgId = null) {
   const headers = cliHeaders({ apiKey, sessionId: randomUUID() });
-  const out = { credits: null, subscription: null, errors: [] };
+
+  const whoamiResult = await getJson("/alpha/whoami?limits=1", headers);
+  const orgId = knownOrgId ?? whoamiResult.data?.org?.id ?? null;
+  const query = orgId ? `?orgId=${encodeURIComponent(orgId)}` : "";
+
   const [credits, subscription] = await Promise.all([
     getJson(`/alpha/billing/credits${query}`, headers),
     getJson(`/alpha/billing/subscriptions${query}`, headers),
   ]);
-  if (credits.error) out.errors.push(credits.error);
-  else out.credits = credits.data;
-  if (subscription.error) out.errors.push(subscription.error);
-  else out.subscription = subscription.data;
+
+  const since = subscription.data?.data?.currentPeriodStart ?? null;
+  const summaryParams = new URLSearchParams();
+  if (orgId) summaryParams.set("orgId", orgId);
+  if (since) summaryParams.set("since", since);
+  const summaryQuery = summaryParams.toString() ? `?${summaryParams}` : "";
+  const summary = await getJson(`/alpha/usage/summary${summaryQuery}`, headers);
+
+  const out = {
+    whoami: whoamiResult.data ?? null,
+    credits: credits.data ?? null,
+    subscription: subscription.data ?? null,
+    summary: summary.data ?? null,
+    orgId,
+    errors: [],
+  };
+  for (const result of [whoamiResult, credits, subscription, summary]) {
+    if (result.error) out.errors.push(result.error);
+  }
   return out;
 }
 

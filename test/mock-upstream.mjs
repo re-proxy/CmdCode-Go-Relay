@@ -110,18 +110,48 @@ export function startMockUpstream({ port = 0 } = {}) {
         JSON.stringify({
           user: { id: "u_1", userName: "tester", name: "Tester" },
           org: { id: "o_1", login: "tester", planId: "individual-go" },
+          orgLimits: [{ window: "monthly", used: 120, cap: 400 }],
         }),
       );
       return;
     }
 
-    if (url.pathname === "/alpha/billing/credits" || url.pathname === "/alpha/billing/subscriptions") {
+    if (url.pathname === "/alpha/billing/credits") {
       res.writeHead(200, { "content-type": "application/json" });
-      if (url.pathname.endsWith("credits")) {
-        res.end(JSON.stringify({ credits: { monthlyCredits: 4.5, purchasedCredits: 1, freeCredits: 0, planId: "individual-go" } }));
-      } else {
-        res.end(JSON.stringify({ data: { planId: "individual-go", status: "active", currentPeriodEnd: "2026-12-01T00:00:00.000Z" } }));
-      }
+      const now = Date.now();
+      res.end(
+        JSON.stringify({
+          credits: { monthlyCredits: 4.5, purchasedCredits: 1, freeCredits: 0, planId: "individual-go" },
+          windowLimits: {
+            limited: true,
+            fiveHour: { used: 30, cap: 100, resetAt: now + 90 * 60 * 1000 },
+            weekly: { used: 220, cap: 1000, resetAt: now + 3 * 86400 * 1000 },
+          },
+          sandboxMinutes: { usedMinutes: 12, limitMinutes: 60, resetAt: now + 20 * 86400 * 1000 },
+          sandboxAccess: true,
+        }),
+      );
+      return;
+    }
+
+    if (url.pathname === "/alpha/billing/subscriptions") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          data: {
+            planId: "individual-go",
+            status: "active",
+            currentPeriodStart: "2026-11-01T00:00:00.000Z",
+            currentPeriodEnd: "2026-12-01T00:00:00.000Z",
+          },
+        }),
+      );
+      return;
+    }
+
+    if (url.pathname === "/alpha/usage/summary") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ totalCount: 42, totalCost: 5.5, periodBasis: "billing-period" }));
       return;
     }
 

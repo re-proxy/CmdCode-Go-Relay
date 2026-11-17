@@ -24,7 +24,7 @@ Command Code 有两套入口，容易混淆：
 - **账号池**：多账号轮询 + 每账号并发闸门；凭据被上游拒绝时把账号标记为「需重新登录」并跳过，但不删除、不丢密钥，重新登录即自动恢复。
 - **多 API Key**：为每个客户端单独发密钥，可停用/启用/删除，只显示后六位。
 - **使用记录**：最近 500 次请求的模型、来源协议、token、耗时、账号、成败。
-- **余额接口**：`GET /v1/balance` 返回订阅积分合计与完整性标记，给下游 router 查额度用。
+- **余额与用量**：`GET /v1/balance` 返回订阅积分合计与完整性标记，给下游 router 查额度用；`GET /v1/usage` 返回 5 小时 / 每周 / 云分钟窗口，管理页按官网样式展示。
 - **中文管理页**：账号、模型、API 接入、使用记录四个标签页，15 秒自动刷新。
 - **凭据加密**：账号 API Key 用 AES-256-GCM 加密落在数据文件里，密钥来自 `RELAY_MASTER_KEY`。
 
@@ -291,6 +291,47 @@ curl http://127.0.0.1:8317/v1/messages \
 
 `POST /v1/responses` 返回标准 Responses 对象（`object:"response"`、`output` 里的 `message` / `function_call` 项、`output_text`），流式时发出 `response.created` → `response.output_text.delta` → `response.completed` 事件序列，`sequence_number` 连续编号。`input` 支持字符串、`message` 项，以及 `function_call` / `function_call_output` 组成的工具轮次；`instructions` 会作为 system prompt 转发。
 
+## 用量窗口（5 小时 / 每周 / 月度）
+
+管理页新增「用量」标签页，口径与官网一致：
+
+- **积分条**：账单周期总池 = 套餐月度积分（与剩余取较大者）+ 已购 + 赠送，按已用比例着色（<50% 绿、<80% 黄、≥80% 红）
+- **5 小时窗口**：`used / cap`、百分比、`· 重置倒计时`
+- **每周窗口**：同上
+- **本月云分钟**：开通沙箱时显示
+- 另附当期请求数、续费倒计时、额外积分，以及跳官网明细的链接
+
+只有点「刷新」或「全部刷新」才请求上游；页面其他时候只显示上次结果，不会把轮询变成上游调用。
+
+同样的数据也开放给外部查询：
+
+```sh
+curl http://127.0.0.1:8317/v1/usage -H "Authorization: Bearer sk-cmd-..."
+```
+
+```json
+{
+  "now": 1794918959000,
+  "windows": {
+    "limited": true,
+    "fiveHour": { "used": 30, "cap": 100, "percent": 30, "resetAt": 1794922559000 },
+    "weekly":   { "used": 220, "cap": 1000, "percent": 22, "resetAt": 1795178159000 }
+  },
+  "accounts": [
+    {
+      "account": "main",
+      "planName": "Go",
+      "credits": { "totalRemaining": 5.5, "totalPool": 11, "usagePercent": 50 },
+      "windows": { "fiveHour": { "used": 30, "cap": 100, "percent": 30 } },
+      "sandbox": { "usedMinutes": 12, "limitMinutes": 60, "percent": 20 },
+      "requests": 42
+    }
+  ]
+}
+```
+
+`windows` 顶层是**所有启用账号里最紧的那个窗口**——真正会先限流的就是它。该接口默认缓存 60 秒。
+
 ## 余额接口
 
 ```sh
@@ -418,7 +459,7 @@ npm test
 | `test/login-cli.mjs` | 本机 `login` 命令：回调端口、跨域预检、urlencoded/JSON 投递、密钥校验失败、`--relay` 写入成功与密码错误 |
 | `test/admin-harness.mjs` | 在最小 DOM 环境里执行管理页脚本，验证首屏与四个标签页都能渲染 |
 
-`test/run.mjs` 里还覆盖了 `keygen` 与 `doctor` 两个子命令（含上游不可达、主密钥错误等失败路径）。
+`test/run.mjs` 里还覆盖了 `keygen` 与 `doctor` 两个子命令（含上游不可达、主密钥错误等失败路径），以及用量窗口的解析与 `/v1/usage` 输出。
 
 ## 验证记录
 
@@ -426,6 +467,7 @@ npm test
 
 **已验证**
 
+- 用量口径：窗口字段（`windowLimits.fiveHour/weekly`、`sandboxMinutes`）与积分池公式照官方 CLI 的实现复刻，用 mock 数据逐项断言百分比、重置时间、总量与请求数；**真实订阅的数值没有核对过**（没有凭据）。
 - 模型目录：真实上游返回 117 个模型（`/provider/v1/models` 与 `?view=client` 合并），含上下文长度、思考档位、价格、最低套餐、别名。
 - 请求形状：`/v1/chat/completions`、流式 `/v1/chat/completions`、带 tools 的 chat、`/v1/messages`、`/v1/responses` 五种形状都真实打到 `api.commandcode.ai`，全部被网关接受——都只返回 401 鉴权错误，**没有一个被 400 参数校验拒绝**。这证明请求体字段与上游 schema 一致。
 - 登录入口：官方 `studio/auth/cli` 链接对 `callback` 与 `state` 参数返回 302 跳到 `/signin`，回调参数被完整保留。

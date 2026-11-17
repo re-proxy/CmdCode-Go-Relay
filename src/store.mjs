@@ -66,6 +66,8 @@ export class Store {
       lastUsedAt: a.lastUsedAt ?? null,
       credits: a.credits ?? null,
       creditsCheckedAt: a.creditsCheckedAt ?? null,
+      usage: a.usage ?? null,
+      usageCheckedAt: a.usageCheckedAt ?? null,
       needsReauth: a.needsReauth === true,
     };
   }
