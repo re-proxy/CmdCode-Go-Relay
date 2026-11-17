@@ -1,0 +1,25 @@
+{
+  "name": "cmdcd-relay",
+  "version": "1.0.0",
+  "description": "Self-hosted relay that exposes a Command Code CodingPlan subscription as OpenAI- and Anthropic-compatible APIs",
+  "type": "module",
+  "main": "src/server.mjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "dev": "node --watch src/server.mjs",
+    "keygen": "node src/server.mjs keygen",
+    "test": "node test/run.mjs && node test/pool-unit.mjs && node test/admin-harness.mjs"
+  },
+  "keywords": [
+    "command-code",
+    "relay",
+    "openai",
+    "anthropic",
+    "proxy"
+  ],
+  "license": "MIT",
+  "dependencies": {}
+}

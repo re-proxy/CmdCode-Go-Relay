@@ -1,0 +1,25 @@
+services:
+  relay:
+    build: .
+    image: cmdcd-relay:latest
+    container_name: cmdcd-relay
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      RELAY_DATA_FILE: /data/relay.json
+    ports:
+      - "0.0.0.0:8317:8317"
+    volumes:
+      - relay-data:/data
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8317/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  relay-data:

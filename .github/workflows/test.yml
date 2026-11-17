@@ -1,0 +1,62 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # The relay has no runtime dependencies; the suites only need Node.
+      - name: Syntax check
+        run: |
+          for f in src/*.mjs test/*.mjs; do node --check "$f"; done
+
+      - name: Offline suites
+        run: npm test
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: cmdcd-relay:ci
+
+      - name: Start and probe the container
+        run: |
+          docker run -d --name relay \
+            -e RELAY_ADMIN_PASSWORD=ci-password \
+            -e RELAY_MASTER_KEY="$(node -e 'console.log(require("crypto").randomBytes(32).toString("base64"))')" \
+            -p 8317:8317 cmdcd-relay:ci
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:8317/health >/dev/null; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8317/health
+          curl -fsS http://127.0.0.1:8317/ | grep -q "Command Code Relay"
+          docker logs relay
+
+      - name: Keygen entry point
+        run: |
+          docker run --rm cmdcd-relay:ci keygen | grep -Eq '^[A-Za-z0-9+/]{43}=$'
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f relay || true

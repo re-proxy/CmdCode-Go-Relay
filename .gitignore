@@ -1,0 +1,16 @@
+# Runtime data: accounts and API keys live here
+data/
+.env
+
+# Dependencies (the relay itself has none; this keeps local probes out)
+node_modules/
+dist/
+*.log
+
+# Local reverse-engineering scratch: bundles the official CLI, not ours to publish
+.re/
+.pi/
+
+# OS noise
+.DS_Store
+Thumbs.db
