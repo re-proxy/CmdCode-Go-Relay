@@ -188,49 +188,69 @@ docker compose up -d --build
 
 ## 接入账号
 
-> **Command Code 的授权页只接受 localhost 回调地址**，传服务器 IP 或域名会被直接拒绝，页面上显示「Only localhost URLs are allowed for security」。Relay 已按这条规则生成回调，所以下面三种方式都能用，只是自动化程度不同。
+> Command Code 的授权页只接受 **localhost** 回调，传服务器 IP 或域名会被拒绝（“Only localhost URLs are allowed for security”）。而且它是用 **POST** 把凭据投递到那个回调，不是放进 URL——所以「粘贴回调地址」这条路通常拿不到 key，真正的 key 要么在回调里被收到，要么由授权页显示出来供复制。
 
-### 方式一：浏览器登录（回调走 localhost）
+对「Relay 跑在别处」的部署，最省事的是方式一。
 
-点「生成登录链接」打开官方授权页。回调地址始终是 `http://127.0.0.1:<端口>/callback`，因此分两种情况：
+### 方式一：本机登录，直接写入（推荐）
 
-**能全自动完成** —— 当你在下列位置打开管理页时，浏览器能直接访问到回调，授权后账号自动写入：
+在**你自己的电脑**上（不是服务器），于仓库目录执行：
 
-- 在 Relay 所在机器上打开 `http://127.0.0.1:8317`
-- 或用 SSH 隧道把远端端口映射到本机：
+```sh
+node src/server.mjs login --relay http://服务器IP:8317
+```
+
+它会做四件事：在本机起一个临时回调服务、打开官方授权页、收到凭据后向上游校验、然后把账号写进你的 Relay。授权页显示授权成功后，终端里会打印结果。
+
+密码可以用参数给，也可以走环境变量：
+
+```sh
+RELAY_ADMIN_PASSWORD=你的管理密码 node src/server.mjs login --relay http://服务器IP:8317
+```
+
+不加 `--relay` 时只打印 API Key，你自己粘到管理页：
+
+```sh
+node src/server.mjs login
+# ...
+# 把下面这串 API Key 粘到 Relay 管理页「粘贴回调 / API Key」：
+#   sk-cmd-...
+```
+
+常用参数：`--name 名字` 指定账号名，`--port 端口` 固定本机回调端口，`--json` 输出机器可读结果，`--no-open` 不自动开浏览器。
+
+这条路径不需要服务器可达你的浏览器，也不需要反代配合，是本机网络环境里最稳的一条。
+
+### 方式二：管理页里直接登录（本机或隧道）
+
+当管理页本身就开在 `127.0.0.1` 上时，浏览器能直接送达回调，授权后账号自动写入。两种做法：
+
+- Relay 就跑在同一台机器上，直接开 `http://127.0.0.1:8317`
+- 或者建 SSH 隧道：
 
   ```sh
   ssh -N -L 8317:127.0.0.1:8317 user@服务器IP
-  # 然后在本机浏览器打开 http://127.0.0.1:8317
+  # 本机浏览器打开 http://127.0.0.1:8317
   ```
 
-**需要手动复制一次** —— 如果你直接用 `http://内网IP:8317` 访问（浏览器在另一台机器上），授权后浏览器会去连 `127.0.0.1:8317` 但连不上。这时官方页面会自动退到一个备用页，**把 API Key 显示出来让你复制**；把复制到的 Key 粘进「粘贴回调 / API Key」即可。若页面没显示 Key，用方式二。
+如果直接用内网 IP 打开管理页，点「生成登录链接」也能授权，但回调落不到服务器：授权页会退到备用页把 API Key 显示出来，复制后粘到「粘贴回调 / API Key」即可。若没显示 Key，用方式一。
 
-### 方式二：粘贴 API Key
+### 方式三：粘贴已有的 API Key
 
-在「粘贴回调 / API Key」里贴任意一种：
+已经在本机跑过 `cmd login` 的，把 `~/.commandcode/auth.json` 里的 `apiKey` 贴进「粘贴回调 / API Key」。也可以在 Studio 里创建 key 后粘贴。反代、纯内网、无浏览器的服务器都适用。
 
-- 授权页给出的 API Key
-- 授权后地址栏里带 `apiKey=` 的完整回调 URL
-- 本机 `cmd login` 之后 `~/.commandcode/auth.json` 里的 `apiKey`
+### 方式四：从本机导入
 
-这是最可靠的一条路，反代、纯内网、无浏览器的服务器都适用。
-
-### 方式三：从本机导入
-
-Relay 跑在已经执行过 `cmd login` 的机器上时，点「导入本机登录态」，直接读该机的 `~/.commandcode/auth.json`。
+Relay 恰好跑在已经执行过 `cmd login` 的机器上时，点「导入本机登录态」，直接读该机的 `~/.commandcode/auth.json`。
 
 添加后点「验证」确认连通性，「余额」拉取当期积分。
 
-### 关于回调地址
+### 关于回调地址与集成
 
-回调只允许 loopback，默认取当前访问地址；如果访问地址已经是 loopback 就直接用。需要指定别的本机端口（例如隧道落在不同端口）时用 `RELAY_LOGIN_CALLBACK`：
-
-```dotenv
-RELAY_LOGIN_CALLBACK=http://127.0.0.1:9000
-```
-
-非 loopback 的值会被忽略，管理页会给出提示。`RELAY_PUBLIC_URL` 只影响管理页显示的接入地址，不参与回调。
+- 回调恒定 loopback；用 `RELAY_LOGIN_CALLBACK` 可指定别的本机端口（例如隧道落在 9000）。非 loopback 值会被忽略并提示。
+- `RELAY_PUBLIC_URL` 只影响管理页显示的接入地址，不参与回调。
+- 回调同时接受 `GET` 查询参数、`urlencoded` POST 和 JSON POST；JSON 以 `{"success":true}` 应答，表单则 303 跳转到完成页——与官方 CLI 的处理保持一致。
+- 跨域预检会返回 `access-control-allow-private-network: true`，否则 Chrome 会拦住公网页面到 loopback 的请求。
 
 ## 客户端配置
 
@@ -320,7 +340,8 @@ curl http://127.0.0.1:8317/v1/balance -H "Authorization: Bearer sk-cmd-..."
 | API 返回 429 | 上游限流，稍后重试 |
 | API 返回 503 `no_enabled_account` | 没有启用账号，去管理页启用 |
 | API 返回 503 `account_concurrency_limit` | 所有账号并发已满，调高 `RELAY_MAX_CONCURRENT` 或排队时间 |
-| 授权页报「Only localhost URLs are allowed」 | 你用的是旧版 Relay。当前版本回调固定 loopback，升级即可 |
+| 授权页报「Only localhost URLs are allowed」 | 回调必须是 loopback。当前版本已固定，若仍出现说明是旧版，升级后重试 |
+| 管理页授权后没得到 Key | 用本机 `node src/server.mjs login --relay http://服务器:8317`，那条路不依赖回调可达性 |
 | 登录页授权后回调打不开 | 用「粘贴回调地址」方式，把地址栏完整 URL 提交 |
 | 不确定哪里出问题 | 跑 `docker compose exec relay node src/server.mjs doctor`，它会把配置、上游、账号、密钥逐项列出 |
 | 改了 `.env` 没生效 | `docker compose up -d --force-recreate`（`restart` 不会重读 env） |
@@ -341,6 +362,7 @@ curl http://127.0.0.1:8317/v1/balance -H "Authorization: Bearer sk-cmd-..."
 | --- | --- |
 | `... keygen` | 打印一串 32 字节主密钥并退出。不读 `.env`、不连网 |
 | `... doctor` | 逐项自检配置、存储、上游、账号凭据、API Key，有 FAIL 时退出码 1 |
+| `... login` | 在**本机**跑完整授权流程，可 `--relay` 直接把账号写进远端 Relay。不需要主密钥 |
 
 ```sh
 docker compose exec relay node src/server.mjs doctor
@@ -382,6 +404,7 @@ npm test
 | --- | --- |
 | `test/run.mjs` | 起一个真实服务进程 + mock 上游，跑完整链路：鉴权、账号接入、模型目录与别名、三种协议的流式与非流式、工具调用与多轮回放、中途断流、错误透传、并发闸门、CORS 作用域、密钥生命周期、重启后持久化 |
 | `test/pool-unit.mjs` | 账号池失败策略：429 不停用、401 标记重认证、暂停账号被跳过且保留密钥、恢复后自动解除 |
+| `test/login-cli.mjs` | 本机 `login` 命令：回调端口、跨域预检、urlencoded/JSON 投递、密钥校验失败、`--relay` 写入成功与密码错误 |
 | `test/admin-harness.mjs` | 在最小 DOM 环境里执行管理页脚本，验证首屏与四个标签页都能渲染 |
 
 `test/run.mjs` 里还覆盖了 `keygen` 与 `doctor` 两个子命令（含上游不可达、主密钥错误等失败路径）。
@@ -396,7 +419,8 @@ npm test
 - 请求形状：`/v1/chat/completions`、流式 `/v1/chat/completions`、带 tools 的 chat、`/v1/messages`、`/v1/responses` 五种形状都真实打到 `api.commandcode.ai`，全部被网关接受——都只返回 401 鉴权错误，**没有一个被 400 参数校验拒绝**。这证明请求体字段与上游 schema 一致。
 - 登录入口：官方 `studio/auth/cli` 链接对 `callback` 与 `state` 参数返回 302 跳到 `/signin`，回调参数被完整保留。
 - 回调只允许 loopback：从上游前端代码确认授权页对非 localhost 回调直接拒绝（原文 “Only localhost URLs are allowed for security”），因此登录链接的 `callback` 固定为 `127.0.0.1`；用 LAN 或域名打开管理页时不会把该地址写进链接。
-- 回调投递：授权页以跨域 POST（urlencoded / JSON）投递凭据，已实测表单与 JSON 两种 POST 都被正确解析，缺少密钥与密钥无效分别返回不同错误；`OPTIONS` 预检返回 204 并带 `access-control-allow-private-network: true`，满足 Chrome 对公网→loopback 的限制。
+- 回调投递：授权页以跨域 POST（urlencoded / JSON）投递凭据，已实测表单与 JSON 两种 POST 都被正确解析，缺少密钥与密钥无效分别返回不同错误；`OPTIONS` 预检返回 204 并带 `access-control-allow-private-network: true`，满足 Chrome 对公网→loopback 的限制。表单 POST 返回 303、JSON POST 返回 `{"success":true}`，与官方 CLI 的应答形状一致。
+- 本机 `login` 命令：起本机回调、接收两种 POST、校验密钥、`--relay` 写入远端 Relay 全流程通过自动化测试；密码错误时不写入并仍打印可用 key。
 - 配置校验：缺 `RELAY_ADMIN_PASSWORD` / `RELAY_MASTER_KEY`、或主密钥不是 32 字节时，启动即退出并给出具体原因。
 - `keygen` 子命令在没有任何配置时也能输出 32 字节主密钥。
 - 数据文件权限 `600`、数据目录 `700`，嵌套路径自动创建。

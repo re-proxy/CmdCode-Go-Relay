@@ -11,7 +11,7 @@
     "start": "node src/server.mjs",
     "dev": "node --watch src/server.mjs",
     "keygen": "node src/server.mjs keygen",
-    "test": "node test/run.mjs && node test/pool-unit.mjs && node test/admin-harness.mjs"
+    "test": "node test/run.mjs && node test/pool-unit.mjs && node test/login-cli.mjs && node test/admin-harness.mjs"
   },
   "keywords": [
     "command-code",

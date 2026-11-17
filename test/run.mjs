@@ -687,7 +687,10 @@ async function main() {
         body: JSON.stringify({ apiKey: "test-key-good", state: "abc", userName: "viajson" }),
         redirect: "manual",
       });
-      check("callback accepts a JSON POST", json.status === 303, `got ${json.status}`);
+      // Matches the official CLI: a JSON callback gets a JSON acknowledgement.
+      check("callback accepts a JSON POST", json.status === 200, `got ${json.status}`);
+      const jsonBody = await json.json().catch(() => ({}));
+      check("a JSON callback is acknowledged like the CLI does", jsonBody.success === true, JSON.stringify(jsonBody));
     }
     {
       // Chrome blocks public-origin -> loopback requests without this opt-in.

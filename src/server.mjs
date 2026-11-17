@@ -54,6 +54,13 @@ if (subcommand === "doctor") {
   process.exit(await doctor());
 }
 
+// `login` runs the OAuth flow on this machine so a relay elsewhere can be fed
+// a key without needing a loopback callback of its own.
+if (subcommand === "login") {
+  const { runLoginCli } = await import("./login-cli.mjs");
+  process.exit(await runLoginCli(process.argv.slice(3)));
+}
+
 const problems = validateConfig();
 if (problems.length) {
   for (const problem of problems) console.error(`config: ${problem}`);

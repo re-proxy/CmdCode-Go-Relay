@@ -178,10 +178,16 @@ export function createLoginBroker({ store }) {
 
     const raw = Buffer.concat(chunks).toString("utf8").trim();
     const contentType = String(req.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase();
-    try {
-      if (contentType === "application/json") {
+    // Sniff the body as well: some callers post JSON without a JSON header.
+    const looksJson = raw.startsWith("{") || contentType === "application/json";
+    if (looksJson) {
+      try {
         return { ...fromQuery, ...JSON.parse(raw) };
+      } catch {
+        // fall through to form parsing
       }
+    }
+    try {
       return { ...fromQuery, ...Object.fromEntries(new URLSearchParams(raw).entries()) };
     } catch {
       return fromQuery;
@@ -238,6 +244,14 @@ export function createLoginBroker({ store }) {
       return;
     }
 
+    // The official CLI answers a JSON callback with a JSON body and redirects
+    // a browser form post to its completion page; mirror both so either client
+    // shape works.
+    if (wantsJsonResponse(req)) {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      res.end(JSON.stringify({ success: true }));
+      return;
+    }
     res.writeHead(303, {
       location: `${origin}/callback/complete${state ? `?state=${encodeURIComponent(state)}` : ""}`,
       "cache-control": "no-store",
@@ -288,6 +302,11 @@ export function createLoginBroker({ store }) {
       return { id: session.id, status: session.status, result: session.result };
     },
   };
+}
+
+function wantsJsonResponse(req) {
+  const contentType = String(req.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase();
+  return req.method === "POST" && contentType === "application/json";
 }
 
 function parseCallbackUrl(value) {
