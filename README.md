@@ -326,13 +326,14 @@ npm test
 - `keygen` 子命令在没有任何配置时也能输出 32 字节主密钥。
 - 数据文件权限 `600`、数据目录 `700`，嵌套路径自动创建。
 - 镜像载荷自足：只拷 `package.json` + `src/` 到空目录，无 `node_modules`、无 `.env`，用 Docker 那套环境变量可直接启动并服务管理页。
+- **Docker 镜像在 CI 里真实构建并运行通过**：GitHub Actions 的 `docker` job 执行 `docker build`、`docker run`、等待 `/health` 就绪、`curl /` 确认管理页、校验 `keygen` 输出格式，全部 success；`test` job 跑完三套离线测试。见 [Actions 记录](https://github.com/Costiae/CmdCode-Go-Relay/actions)。
 
 **未验证**
 
-- **真实账号的生成请求**。没有 CodingPlan 凭据，所以端到端「发一条消息拿到模型回复」尚未实测。
-- **Docker 镜像构建与容器运行**。开发机上 Docker daemon 不可用（`docker.sock` 不存在，colima 因沙箱无法创建 `~/.colima`），`docker build` 与 `docker compose up` 都没有实际执行。Dockerfile 与 compose 是按静态审查写的，第一次部署若有问题请提 issue。
+- **真实账号的生成请求**。没有 CodingPlan 凭据，所以端到端「发一条消息拿到模型回复」尚未实测。这是唯一剩下的验证项，部署后第一条消息即可确认。
+- **真实账号的余额与额度窗口**。`/v1/balance` 的解析逻辑按逆向得到的字段写，但没有真实订阅数据核对。
 
-上面两项在真实部署后即可确认。若首次请求失败，先看 `docker compose logs relay`，再对照「常见问题」。
+若首次请求失败，先看 `docker compose logs relay`，再对照「常见问题」。把报错贴到 issue 即可。
 
 ## 协议说明
 
