@@ -41,7 +41,7 @@ Command Code 有两套入口，容易混淆：
 ### 三步启动
 
 ```sh
-git clone https://github.com/Costiae/CmdCode-Go-Relay.git cmdcd-relay
+git clone https://github.com/re-proxy/CmdCode-Go-Relay.git cmdcd-relay
 cd cmdcd-relay
 sh scripts/init-env.sh
 ```
@@ -365,7 +365,7 @@ npm test
 - `keygen` 子命令在没有任何配置时也能输出 32 字节主密钥。
 - 数据文件权限 `600`、数据目录 `700`，嵌套路径自动创建。
 - 镜像载荷自足：只拷 `package.json` + `src/` 到空目录，无 `node_modules`、无 `.env`，用 Docker 那套环境变量可直接启动并服务管理页。
-- **Docker 镜像在 CI 里真实构建并运行通过**：GitHub Actions 的 `docker` job 执行 `docker build`、`docker run`、等待 `/health` 就绪、`curl /` 确认管理页、校验 `keygen` 输出格式，全部 success；`test` job 跑完三套离线测试。见 [Actions 记录](https://github.com/Costiae/CmdCode-Go-Relay/actions)。
+- **Docker 镜像在 CI 里真实构建并运行通过**：GitHub Actions 的 `docker` job 执行 `docker build`、`docker run`、等待 `/health` 就绪、`curl /` 确认管理页、校验 `keygen` 输出格式，全部 success；`test` job 跑完三套离线测试。见 [Actions 记录](https://github.com/re-proxy/CmdCode-Go-Relay/actions)。
 
 **未验证**
 
