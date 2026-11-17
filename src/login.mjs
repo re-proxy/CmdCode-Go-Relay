@@ -10,13 +10,55 @@ import { summarizeCredits } from "./credits.mjs";
 /**
  * Account onboarding.
  *
- * Three ways in, in order of convenience:
- *   1. Browser login — open the official CLI login URL with the relay's own
- *      callback, which hands back an API key.
- *   2. Paste — drop the full callback URL (or just the key) into the admin page.
- *   3. Local import — read `~/.commandcode/auth.json` from a machine that
- *      already ran `cmd auth login`.
+ * Command Code's consent page only accepts **loopback** callback URLs; anything
+ * else is rejected before the user can approve, so a server's LAN or public
+ * address must never be offered as a callback. All three entry points respect
+ * that:
+ *
+ *   1. Browser login — the callback is always `http://127.0.0.1:<port>/callback`.
+ *      When the console is opened on the relay host (or through an SSH tunnel)
+ *      the browser reaches it and the account is written automatically. When it
+ *      cannot, the consent page falls back to showing the key for copying.
+ *   2. Paste — drop the callback URL or the key itself into the console.
+ *   3. Local import — read `~/.commandcode/auth.json` from a host that already
+ *      ran `cmd login`.
  */
+
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
+
+/** True when `origin` points at this machine's loopback interface. */
+export function isLoopbackOrigin(origin) {
+  try {
+    const url = new URL(origin);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+    return LOOPBACK_HOSTS.has(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Picks the callback origin.
+ *
+ * `RELAY_LOGIN_CALLBACK` wins so a tunnel on another loopback port can be
+ * declared explicitly. Otherwise the request origin is used, but only when it
+ * is already loopback.
+ */
+export function resolveCallbackOrigin(requestOrigin) {
+  if (config.loginCallback) {
+    if (isLoopbackOrigin(config.loginCallback)) {
+      return { origin: config.loginCallback.replace(/\/+$/, ""), source: "config" };
+    }
+    return {
+      origin: null,
+      source: "config",
+      rejected: config.loginCallback,
+      reason: "RELAY_LOGIN_CALLBACK must be a loopback address (127.0.0.1, localhost or [::1]).",
+    };
+  }
+  if (isLoopbackOrigin(requestOrigin)) return { origin: requestOrigin.replace(/\/+$/, ""), source: "request" };
+  return { origin: null, source: "request", rejected: requestOrigin };
+}
 export function createLoginBroker({ store }) {
   const sessions = new Map();
 
@@ -27,16 +69,31 @@ export function createLoginBroker({ store }) {
     }
   }
 
-  function start({ origin }) {
+  /**
+   * Creates a login session and the official consent URL.
+   *
+   * The callback is loopback in every case. `mode` tells the caller what to
+   * expect: "automatic" when the console itself is open on loopback (so the
+   * browser can complete the handoff), "manual" otherwise — the consent page
+   * will fail to reach the callback and offer the key for copying instead.
+   */
+  function start({ requestOrigin }) {
     sweep();
+    const resolved = resolveCallbackOrigin(requestOrigin);
+    const automatic = Boolean(resolved.origin);
+    // A remote browser gets a loopback callback it cannot serve, which is what
+    // makes the consent page fall back to showing the key.
+    const callbackOrigin = automatic ? resolved.origin : `http://127.0.0.1:${config.port}`;
+    const callback = `${callbackOrigin}/callback`;
+
     const state = randomToken(24);
     const id = randomUUID();
-    const callback = `${origin}/callback`;
     const url =
       `${config.studioBase}/studio/auth/cli` +
       `?callback=${encodeURIComponent(callback)}` +
       `&state=${encodeURIComponent(state)}` +
       `&mode=redirect`;
+
     sessions.set(id, {
       id,
       state,
@@ -44,7 +101,17 @@ export function createLoginBroker({ store }) {
       status: "pending",
       result: null,
     });
-    return { id, state, url, callback };
+
+    return {
+      id,
+      state,
+      url,
+      callback,
+      mode: automatic ? "automatic" : "manual",
+      ...(resolved.rejected
+        ? { ignoredOrigin: resolved.rejected, warning: resolved.reason ?? null }
+        : {}),
+    };
   }
 
   function sessionByState(state) {
@@ -89,6 +156,38 @@ export function createLoginBroker({ store }) {
   }
 
   /** Handles both /callback and /callback/complete. */
+  /**
+   * Reads the credential payload a consent page delivers.
+   *
+   * The official page POSTs cross-origin to the loopback callback, either as
+   * `application/x-www-form-urlencoded` or JSON. Query parameters are also
+   * accepted so a copied URL pasted into a browser still works.
+   */
+  async function readCallbackPayload(req, url) {
+    const fromQuery = Object.fromEntries(url.searchParams.entries());
+    if (req.method !== "POST") return fromQuery;
+
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of req) {
+      size += chunk.length;
+      if (size > 16 * 1024) throw new Error("callback payload too large");
+      chunks.push(chunk);
+    }
+    if (!chunks.length) return fromQuery;
+
+    const raw = Buffer.concat(chunks).toString("utf8").trim();
+    const contentType = String(req.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase();
+    try {
+      if (contentType === "application/json") {
+        return { ...fromQuery, ...JSON.parse(raw) };
+      }
+      return { ...fromQuery, ...Object.fromEntries(new URLSearchParams(raw).entries()) };
+    } catch {
+      return fromQuery;
+    }
+  }
+
   async function handleCallback(req, res, url, origin) {
     if (url.pathname === "/callback/complete") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
@@ -96,15 +195,24 @@ export function createLoginBroker({ store }) {
       return;
     }
 
-    const error = url.searchParams.get("error");
-    if (error) {
-      res.writeHead(400, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-      res.end(renderErrorPage(error, url.searchParams.get("error_description")));
+    let payload;
+    try {
+      payload = await readCallbackPayload(req, url);
+    } catch (err) {
+      res.writeHead(413, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+      res.end(renderErrorPage("payload_too_large", err?.message ?? String(err)));
       return;
     }
 
-    const apiKey = url.searchParams.get("apiKey");
-    const state = url.searchParams.get("state");
+    const error = payload.error;
+    if (error) {
+      res.writeHead(400, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+      res.end(renderErrorPage(String(error), payload.error_description));
+      return;
+    }
+
+    const apiKey = typeof payload.apiKey === "string" ? payload.apiKey : null;
+    const state = typeof payload.state === "string" ? payload.state : null;
     if (!apiKey) {
       res.writeHead(400, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
       res.end(
@@ -120,9 +228,9 @@ export function createLoginBroker({ store }) {
     try {
       await complete(session ?? { status: "pending" }, {
         apiKey,
-        userId: url.searchParams.get("userId"),
-        userName: url.searchParams.get("userName"),
-        keyName: url.searchParams.get("keyName"),
+        userId: payload.userId ?? null,
+        userName: payload.userName ?? null,
+        keyName: payload.keyName ?? null,
       });
     } catch (err) {
       res.writeHead(400, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });

@@ -273,10 +273,10 @@ function renderAccounts() {
     sec.innerHTML = ''
       + '<h2>账号<span class="spacer"></span><button id="checkAll">全部验证</button></h2>'
       + '<div class="pad"><div class="grid">'
-      + '<div class="card"><h3>浏览器登录</h3><p>打开官方登录页，授权后自动回写账号。</p>'
+      + '<div class="card"><h3>浏览器登录</h3><p>打开官方登录页授权。回调只用 localhost，在本机或 SSH 隧道下可全自动完成。</p>'
       + '<div class="row" style="margin-top:10px"><button class="primary" id="startLogin">生成登录链接</button></div>'
       + '<div id="loginBox" class="stack" style="margin-top:10px"></div></div>'
-      + '<div class="card"><h3>粘贴回调 / API Key</h3><p>把地址栏里的完整回调 URL，或 Studio 里创建的 API Key 贴进来。</p>'
+      + '<div class="card"><h3>粘贴回调 / API Key</h3><p>把授权页给出的 API Key、完整回调 URL，或 <code>~/.commandcode/auth.json</code> 里的 key 贴进来。</p>'
       + '<div class="stack" style="margin-top:10px"><input id="pasteName" placeholder="账号名称（可选）">'
       + '<textarea id="pasteValue" rows="3" placeholder="http://127.0.0.1:xxxx/callback?apiKey=... 或 sk-..."></textarea>'
       + '<button class="primary" id="pasteSubmit">添加账号</button></div></div>'
@@ -305,11 +305,21 @@ function renderAccounts() {
       btn.disabled = true;
       try {
         const r = await api("/admin/api/accounts/login-url", { method: "POST", body: {} });
+        const warning = r.warning
+          ? '<p class="small" style="color:var(--warn)">' + esc(r.warning) + '</p>'
+          : "";
+        const explanation = r.mode === "automatic"
+          ? '<p class="small muted">授权后官方页面会跳回本服务的 <code>' + esc(r.callback) + '</code>，账号自动写入，无需复制任何东西。</p>'
+          : '<p class="small muted">这台机器上浏览器访问不到回调地址（Command Code 只允许 localhost 回调）。授权后页面多半会提示无法连接，'
+            + '并显示一串 API Key —— 复制它，用右侧「粘贴回调 / API Key」提交即可。'
+            + '若页面没显示 Key，就改用本机 <code>cmd login</code> 后从 <code>~/.commandcode/auth.json</code> 取。'
+            + '想走全自动流程，可用 SSH 隧道把本页映射到本机 <code>127.0.0.1</code> 再打开。</p>';
         $("#loginBox").innerHTML =
-          '<pre style="white-space:pre-wrap;word-break:break-all">' + esc(r.url) + '</pre>'
+          warning
+          + '<pre style="white-space:pre-wrap;word-break:break-all">' + esc(r.url) + '</pre>'
           + '<div class="row"><a href="' + esc(r.url) + '" target="_blank" rel="noopener"><button class="primary">打开登录页</button></a>'
           + '<button id="pollLogin">我已授权，检查</button></div>'
-          + '<p class="small muted">授权后官方页面会跳回本服务的 <code>/callback</code>，账号自动写入。若回调端口打不开，复制地址栏完整 URL 用右侧「粘贴」添加。</p>';
+          + explanation;
         $("#pollLogin").onclick = async () => {
           await loadOverview();
           const count = state.overview?.accounts.length ?? 0;

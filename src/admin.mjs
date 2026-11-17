@@ -68,7 +68,7 @@ function requireSession(req, res) {
   return session;
 }
 
-export async function adminRouter({ req, res, url, path, store, relay, pool, loginBroker, clientOrigin }) {
+export async function adminRouter({ req, res, url, path, store, relay, pool, loginBroker, clientOrigin, requestOrigin }) {
   // ------------------------------------------------------------ login/logout
   if (path === "/admin/login" && req.method === "POST") {
     const body = await readBody(req);
@@ -118,14 +118,14 @@ export async function adminRouter({ req, res, url, path, store, relay, pool, log
   // -------------------------------------------------------------- the API
   if (path.startsWith("/admin/api/")) {
     if (!requireSession(req, res)) return;
-    await adminApi({ req, res, path, store, relay, pool, loginBroker, clientOrigin });
+    await adminApi({ req, res, path, store, relay, pool, loginBroker, clientOrigin, requestOrigin });
     return;
   }
 
   json(res, 404, { error: "not_found" });
 }
 
-async function adminApi({ req, res, path, store, relay, pool, loginBroker, clientOrigin }) {
+async function adminApi({ req, res, path, store, relay, pool, loginBroker, clientOrigin, requestOrigin }) {
   // overview ---------------------------------------------------------------
   if (path === "/admin/api/overview" && req.method === "GET") {
     json(res, 200, {
@@ -165,7 +165,9 @@ async function adminApi({ req, res, path, store, relay, pool, loginBroker, clien
   }
 
   if (path === "/admin/api/accounts/login-url" && req.method === "POST") {
-    const started = loginBroker.start({ origin: clientOrigin(req) });
+    // The callback must be loopback, so the origin comes from the request's own
+    // Host header rather than the configured public URL.
+    const started = loginBroker.start({ requestOrigin: requestOrigin(req) });
     json(res, 200, started);
     return;
   }

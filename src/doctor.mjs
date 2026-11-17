@@ -2,6 +2,7 @@ import { config } from "./config.mjs";
 import { Store } from "./store.mjs";
 import { getCatalog, whoami, fetchCredits, UpstreamError } from "./upstream.mjs";
 import { summarizeCredits } from "./credits.mjs";
+import { isLoopbackOrigin } from "./login.mjs";
 
 /**
  * `node src/server.mjs doctor`
@@ -50,7 +51,21 @@ export async function doctor() {
   pass("upstream", config.upstreamBase);
   pass("impersonated CLI version", config.cliVersion);
   if (config.publicUrl) pass("public URL", config.publicUrl);
-  else warn("RELAY_PUBLIC_URL is unset", "login callback is derived from request headers");
+  else warn("RELAY_PUBLIC_URL is unset", "the console shows the address you opened it with");
+
+  // Command Code's consent page rejects non-loopback callbacks outright.
+  if (config.loginCallback) {
+    if (isLoopbackOrigin(config.loginCallback)) {
+      pass("login callback origin", config.loginCallback);
+    } else {
+      fail(
+        "RELAY_LOGIN_CALLBACK is not loopback",
+        `Command Code only accepts 127.0.0.1 / localhost callbacks, so "${config.loginCallback}" is ignored`,
+      );
+    }
+  } else {
+    pass("login callback origin", "derived from the console address (loopback only)");
+  }
 
   // --- data file -----------------------------------------------------------
   console.log("\nstorage");

@@ -120,13 +120,19 @@ function requireApiKey(req) {
   return record;
 }
 
-function clientOrigin(req) {
-  if (config.publicUrl) return config.publicUrl.replace(/\/+$/, "");
+/** Origin the browser actually used, ignoring RELAY_PUBLIC_URL. */
+function requestOrigin(req) {
   const proto = (req.headers["x-forwarded-proto"] ?? "http").split(",")[0].trim();
   const host = (req.headers["x-forwarded-host"] ?? req.headers.host ?? "127.0.0.1:8317")
     .split(",")[0]
     .trim();
   return `${proto}://${host}`;
+}
+
+/** Origin used for display and client snippets; honours RELAY_PUBLIC_URL. */
+function clientOrigin(req) {
+  if (config.publicUrl) return config.publicUrl.replace(/\/+$/, "");
+  return requestOrigin(req);
 }
 
 function isAdminPath(path) {
@@ -145,6 +151,11 @@ const server = http.createServer(async (req, res) => {
     res.setHeader("access-control-allow-origin", req.headers.origin ?? "*");
     res.setHeader("access-control-allow-headers", "*");
     res.setHeader("access-control-allow-methods", "GET, POST, DELETE, OPTIONS");
+    // The consent page lives on a public origin and posts to this loopback
+    // callback, which Chrome treats as a private-network request.
+    if (req.headers["access-control-request-private-network"] === "true") {
+      res.setHeader("access-control-allow-private-network", "true");
+    }
     if (req.method === "OPTIONS") {
       res.writeHead(204);
       res.end();
@@ -214,7 +225,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (path.startsWith("/admin") || path === "/" || path === "/index.html") {
-      await adminRouter({ req, res, url, path, store, relay, pool, loginBroker, clientOrigin });
+      await adminRouter({ req, res, url, path, store, relay, pool, loginBroker, clientOrigin, requestOrigin });
       return;
     }
 

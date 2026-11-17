@@ -635,6 +635,29 @@ async function main() {
       check("login-url returns an official login URL", /\/studio\/auth\/cli\?/.test(body.url ?? ""), JSON.stringify(body));
       check("login-url points the callback at the relay", String(body.url).includes(encodeURIComponent(`${base}/callback`)), body.url);
       check("login-url carries a state token", /state=[A-Za-z0-9_-]{10,}/.test(body.url ?? ""), body.url);
+      check("a loopback console gets the automatic handoff", body.mode === "automatic", body.mode);
+    }
+
+    // --- the consent page only accepts loopback callbacks -------------------
+    {
+      // Command Code rejects any non-loopback callback before the user can
+      // approve, so a LAN or public console must never be offered one.
+      for (const origin of ["http://192.168.1.10:8317", "https://relay.example.com"]) {
+        const res = await fetch(`${base}/admin/api/accounts/login-url`, {
+          method: "POST",
+          headers: { ...adminHeaders, "x-forwarded-proto": origin.split(":")[0], "x-forwarded-host": origin.replace(/^https?:\/\//, "") },
+          body: JSON.stringify({}),
+        });
+        const body = await res.json();
+        const callback = new URL(body.callback);
+        check(`callback stays loopback for console ${origin}`, ["127.0.0.1", "localhost", "[::1]"].includes(callback.hostname), body.callback);
+        check(`console ${origin} is told the handoff is manual`, body.mode === "manual", body.mode);
+        check(
+          `the login URL embeds only the loopback callback for ${origin}`,
+          !String(body.url).includes(encodeURIComponent(origin.split("://")[1])),
+          body.url,
+        );
+      }
     }
     {
       const res = await fetch(`${base}/callback?apiKey=test-key-good&state=abc&userName=viacallback&userId=u_9`, {
@@ -644,6 +667,40 @@ async function main() {
       check("callback redirects to the completion page", (res.headers.get("location") ?? "").includes("/callback/complete"), res.headers.get("location") ?? "");
       const overview = await (await fetch(`${base}/admin/api/overview`, { headers: adminHeaders })).json();
       check("callback registered a second account", overview.accounts.length === 2, JSON.stringify(overview.accounts.map((a) => a.name)));
+    }
+    {
+      // The consent page delivers the key by cross-origin POST, not a query.
+      const form = new URLSearchParams({ apiKey: "test-key-good", state: "abc", userName: "viaform", userId: "u_f" });
+      const res = await fetch(`${base}/callback`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded", origin: "https://commandcode.ai" },
+        body: form.toString(),
+        redirect: "manual",
+      });
+      check("callback accepts an urlencoded POST", res.status === 303, `got ${res.status}`);
+      const overview = await (await fetch(`${base}/admin/api/overview`, { headers: adminHeaders })).json();
+      check("a POSTed credential becomes an account", overview.accounts.some((a) => a.name === "viaform"), JSON.stringify(overview.accounts.map((a) => a.name)));
+
+      const json = await fetch(`${base}/callback`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: "https://commandcode.ai" },
+        body: JSON.stringify({ apiKey: "test-key-good", state: "abc", userName: "viajson" }),
+        redirect: "manual",
+      });
+      check("callback accepts a JSON POST", json.status === 303, `got ${json.status}`);
+    }
+    {
+      // Chrome blocks public-origin -> loopback requests without this opt-in.
+      const preflight = await fetch(`${base}/callback`, {
+        method: "OPTIONS",
+        headers: {
+          origin: "https://commandcode.ai",
+          "access-control-request-method": "POST",
+          "access-control-request-private-network": "true",
+        },
+      });
+      check("callback preflight is allowed", preflight.status === 204, `got ${preflight.status}`);
+      check("callback preflight grants private network access", preflight.headers.get("access-control-allow-private-network") === "true", preflight.headers.get("access-control-allow-private-network"));
     }
     {
       const res = await fetch(`${base}/callback/complete?state=abc`);
@@ -672,6 +729,8 @@ async function main() {
 
     // --- concurrency gate actually bounds upstream calls --------------------
     {
+      const enabledBefore = await (await fetch(`${base}/admin/api/overview`, { headers: adminHeaders })).json();
+      const enabledCount = enabledBefore.accounts.filter((a) => a.enabled && !a.needsReauth).length;
       upstream.resetPeak();
       const requests = Array.from({ length: 6 }, () =>
         fetch(`${base}/v1/chat/completions`, {
@@ -685,8 +744,8 @@ async function main() {
       check("the slow request path actually reached the upstream", upstream.peak() > 0, `peak=${upstream.peak()}`);
       check(
         "upstream concurrency never exceeds RELAY_MAX_CONCURRENT per account",
-        upstream.peak() <= 2 * 2,
-        `peak=${upstream.peak()} (2 accounts x limit 2)`,
+        upstream.peak() <= enabledCount * 2,
+        `peak=${upstream.peak()} (${enabledCount} accounts x limit 2)`,
       );
     }
 
@@ -759,6 +818,9 @@ async function main() {
 
     // --- persistence across restart -----------------------------------------
     {
+      const beforeRestart = await (await fetch(`${base}/admin/api/overview`, { headers: adminHeaders })).json();
+      const expectedAccounts = beforeRestart.accounts.length;
+      const expectedKeys = beforeRestart.apiKeys.length;
       child.kill("SIGTERM");
       await new Promise((r) => child.once("exit", r));
       const restarted = spawn(process.execPath, ["src/server.mjs"], {
@@ -782,8 +844,8 @@ async function main() {
       });
       const newCookie = (res.headers.get("set-cookie") ?? "").split(";")[0];
       const overview = await (await fetch(`${base}/admin/api/overview`, { headers: { cookie: newCookie } })).json();
-      check("accounts survive a restart", overview.accounts.length === 2, JSON.stringify(overview.accounts.map((a) => a.name)));
-      check("api keys survive a restart", overview.apiKeys.length === 1);
+      check("accounts survive a restart", overview.accounts.length === expectedAccounts, `${overview.accounts.length} vs ${expectedAccounts}`);
+      check("api keys survive a restart", overview.apiKeys.length === expectedKeys, `${overview.apiKeys.length} vs ${expectedKeys}`);
       restarted.kill("SIGTERM");
       await new Promise((r) => restarted.once("exit", r));
     }
@@ -819,6 +881,21 @@ async function main() {
       });
       check("doctor fails on a wrong master key", badKey.status === 1, `status=${badKey.status}`);
       check("doctor explains the master key problem", /32 bytes/.test(badKey.stdout), badKey.stdout.slice(0, 400));
+
+      const badCallback = await runChild(["src/server.mjs", "doctor"], {
+        ...common,
+        RELAY_DATA_FILE: join(dataDir, "relay.json"),
+        RELAY_LOGIN_CALLBACK: "https://relay.example.com",
+      });
+      check("doctor rejects a non-loopback login callback", badCallback.status === 1, `status=${badCallback.status}`);
+      check("doctor explains the loopback-only rule", /only accepts 127\.0\.0\.1/.test(badCallback.stdout), badCallback.stdout.slice(0, 500));
+
+      const goodCallback = await runChild(["src/server.mjs", "doctor"], {
+        ...common,
+        RELAY_DATA_FILE: join(dataDir, "relay.json"),
+        RELAY_LOGIN_CALLBACK: "http://127.0.0.1:9000",
+      });
+      check("doctor accepts a loopback login callback", goodCallback.status === 0, `status=${goodCallback.status}`);
 
       const deadUpstream = await runChild(["src/server.mjs", "doctor"], {
         ...common,

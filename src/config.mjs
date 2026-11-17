@@ -46,8 +46,13 @@ const DEFAULT_CLI_VERSION = "1.89.2";
 export const config = {
   port: num("RELAY_PORT", 8317),
   host: env("RELAY_HOST", "0.0.0.0"),
-  /** Public base URL used to build the login callback; falls back to the request origin. */
+  /** Public base URL shown in the console and used for client snippets. */
   publicUrl: env("RELAY_PUBLIC_URL", ""),
+  /**
+   * Loopback origin for the OAuth callback. Command Code rejects non-loopback
+   * callbacks, so this can only ever be 127.0.0.1 / localhost / [::1].
+   */
+  loginCallback: env("RELAY_LOGIN_CALLBACK", ""),
   adminPassword: env("RELAY_ADMIN_PASSWORD", ""),
   masterKey: env("RELAY_MASTER_KEY", ""),
   dataFile: env("RELAY_DATA_FILE", resolve(ROOT, "data", "relay.json")),
