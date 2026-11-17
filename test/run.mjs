@@ -588,6 +588,27 @@ async function main() {
       check("clearReauth leaves the account usable", body.account?.needsReauth === false, JSON.stringify(body.account?.needsReauth));
     }
 
+    // --- malformed admin calls are the caller's fault, not a 500 -----------
+    {
+      const res = await fetch(`${base}/admin/api/accounts`, {
+        method: "POST",
+        headers: adminHeaders,
+        body: JSON.stringify({}),
+      });
+      const body = await res.json();
+      check("an empty account submission is a 400", res.status === 400, `got ${res.status}`);
+      check("the validation message is preserved", /API key/i.test(body.error?.message ?? ""), JSON.stringify(body));
+      check("every error carries a request id for log matching", /^[0-9a-f]{8}$/.test(body.error?.request_id ?? ""), JSON.stringify(body.error));
+    }
+    {
+      const res = await fetch(`${base}/admin/api/accounts/credits`, {
+        method: "POST",
+        headers: adminHeaders,
+        body: JSON.stringify({}),
+      });
+      check("credits without an account id is a 400", res.status === 400, `got ${res.status}`);
+    }
+
     // --- unknown model ------------------------------------------------------
     {
       const res = await fetch(`${base}/v1/chat/completions`, {

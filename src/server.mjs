@@ -244,13 +244,35 @@ const server = http.createServer(async (req, res) => {
       } catch {}
       return;
     }
+
+    // A plain Error means a bug or an unclassified failure. Give it a short id,
+    // log it with the path, and hand the id back so a report can be matched to
+    // a log line instead of guessing.
+    const requestId = randomUUID().slice(0, 8);
+    const status = Number(error?.status);
+    const resolved = Number.isFinite(status) && status >= 400 ? status : 500;
+
+    // Validation failures raised as bare Errors (mostly in the admin and login
+    // flows) are the caller's problem, not a server fault.
+    const clientSide = !Number.isFinite(status) && isAdminPath(path);
+    const finalStatus = clientSide ? 400 : resolved;
+
+    if (finalStatus >= 500) {
+      console.error(`[${requestId}] ${req.method} ${path} -> ${finalStatus}: ${error?.message ?? error}`);
+      if (error?.stack) console.error(error.stack.split("\n").slice(1, 5).join("\n"));
+    }
+
     const shape = path.startsWith("/v1/messages")
       ? anthropicError
       : path.startsWith("/v1/responses")
         ? responsesError
         : openaiError;
-    const { status, body } = shape(error);
-    json(res, status, body);
+    const { body } = shape(error);
+    if (finalStatus !== resolved) {
+      body.error.type = "invalid_request_error";
+    }
+    body.error.request_id = requestId;
+    json(res, finalStatus, body);
   }
 });
 
@@ -648,6 +670,26 @@ function abortSignal(res) {
 // --------------------------------------------------------------- attachment
 
 relay.pool = pool;
+
+server.on("error", (error) => {
+  if (error?.code === "EADDRINUSE") {
+    console.error(
+      `Cannot listen on ${config.host}:${config.port} — the port is already in use.\n` +
+        "Another relay instance, or an unrelated process, is holding it. Stop it, or set RELAY_PORT.",
+    );
+  } else if (error?.code === "EACCES") {
+    console.error(`Cannot bind ${config.host}:${config.port} — permission denied. Use a port above 1024.`);
+  } else {
+    console.error(`Server error: ${error?.message ?? error}`);
+  }
+  process.exit(1);
+});
+
+// A stray rejection must not take the whole relay down silently; log it and
+// keep serving, since one bad request should not break every other client.
+process.on("unhandledRejection", (reason) => {
+  console.error(`unhandled rejection: ${reason?.stack ?? reason}`);
+});
 
 server.listen(config.port, config.host, () => {
   const shown = config.host === "0.0.0.0" ? "127.0.0.1" : config.host;

@@ -344,6 +344,8 @@ curl http://127.0.0.1:8317/v1/balance -H "Authorization: Bearer sk-cmd-..."
 | 管理页授权后没得到 Key | 用本机 `node src/server.mjs login --relay http://服务器:8317`，那条路不依赖回调可达性 |
 | 登录页授权后回调打不开 | 用「粘贴回调地址」方式，把地址栏完整 URL 提交 |
 | 不确定哪里出问题 | 跑 `docker compose exec relay node src/server.mjs doctor`，它会把配置、上游、账号、密钥逐项列出 |
+| 所有请求都返回 500 | 看 `docker compose logs --tail=50 relay`。500 会打印 `[request_id] 方法 路径 -> 500: 原因`，响应体里也有同一个 `request_id`，两者对得上就能定位 |
+| 容器启动后立刻退出，没报错 | 多半是端口被占用（`EADDRINUSE`）或主密钥不合法。日志里会直接写原因；也可跑 `doctor` |
 | 改了 `.env` 没生效 | `docker compose up -d --force-recreate`（`restart` 不会重读 env） |
 | 报「CLI 已过时」/ `upgrade_required` | 上游提高了最低 CLI 版本。错误信息里会给出要求版本，把 `.env` 的 `RELAY_CLI_VERSION` 改到不低于它，再 `docker compose up -d --force-recreate` |
 | 流式响应要等全部生成完才出字 | 反代开了缓冲。加 `proxy_buffering off;`（见「HTTPS / 反向代理」） |

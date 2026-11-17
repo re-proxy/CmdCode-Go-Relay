@@ -234,8 +234,9 @@ export class Relay {
   }
 
   async refreshCredits(id) {
+    if (!id) throw new HttpError(400, "`id` is required", { code: "missing_account_id" });
     const credential = this.store.getAccountCredential(id);
-    if (!credential) throw new UpstreamError("credential unavailable", { status: 500 });
+    if (!credential) throw new HttpError(404, "Account not found", { code: "account_not_found" });
     const account = this.store.getAccount(id);
     const data = await fetchCredits(credential, account?.orgId ?? null);
     if (!account?.orgId && data.credits?.orgId) {
