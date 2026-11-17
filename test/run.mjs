@@ -29,6 +29,34 @@ async function waitFor(url, timeoutMs = 15000) {
   throw new Error(`server did not become ready at ${url}`);
 }
 
+/** Runs a short-lived child to completion without blocking this process. */
+function runChild(args, env, timeoutMs = 60000) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, args, {
+      cwd: new URL("..", import.meta.url).pathname,
+      env: { ...process.env, ...env },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish({ status: null, stdout, stderr, timedOut: true });
+    }, timeoutMs);
+    child.stdout.on("data", (d) => (stdout += d.toString()));
+    child.stderr.on("data", (d) => (stderr += d.toString()));
+    child.once("exit", (code) => finish({ status: code, stdout, stderr, timedOut: false }));
+    child.once("error", () => finish({ status: null, stdout, stderr, timedOut: false }));
+  });
+}
+
 async function collectSSE(res) {
   const text = await res.text();
   const events = [];
@@ -758,6 +786,47 @@ async function main() {
       check("api keys survive a restart", overview.apiKeys.length === 1);
       restarted.kill("SIGTERM");
       await new Promise((r) => restarted.once("exit", r));
+    }
+
+    // --- doctor subcommand --------------------------------------------------
+    {
+      const common = {
+        RELAY_ADMIN_PASSWORD: "test-password",
+        RELAY_MASTER_KEY: masterKey,
+        RELAY_UPSTREAM_BASE: upstream.base,
+      };
+      const clean = await runChild(["src/server.mjs", "doctor"], {
+        ...common,
+        RELAY_DATA_FILE: join(dataDir, "relay.json"),
+      });
+      const out = clean.stdout;
+      check("doctor runs and reports every section", /configuration[\s\S]*storage[\s\S]*upstream[\s\S]*accounts[\s\S]*api keys/.test(out), out.slice(0, 300));
+      check("doctor passes on a healthy deployment", clean.status === 0, `status=${clean.status} timedOut=${clean.timedOut} ${out.slice(-200)}`);
+      check("doctor resolves the catalog through the configured upstream", /model catalog reachable/.test(out), out.slice(0, 300));
+      check("doctor never prints a stored credential", !out.includes("test-key-good") && !out.includes("sk-"), out.slice(0, 300));
+
+      const empty = await runChild(["src/server.mjs", "doctor"], {
+        ...common,
+        RELAY_DATA_FILE: join(dataDir, "unconfigured.json"),
+      });
+      check("doctor warns rather than fails on an unconfigured instance", empty.status === 0, `status=${empty.status}`);
+      check("doctor says what is missing", /no accounts yet/.test(empty.stdout), empty.stdout.slice(-300));
+
+      const badKey = await runChild(["src/server.mjs", "doctor"], {
+        ...common,
+        RELAY_MASTER_KEY: "not-valid",
+        RELAY_DATA_FILE: join(dataDir, "relay.json"),
+      });
+      check("doctor fails on a wrong master key", badKey.status === 1, `status=${badKey.status}`);
+      check("doctor explains the master key problem", /32 bytes/.test(badKey.stdout), badKey.stdout.slice(0, 400));
+
+      const deadUpstream = await runChild(["src/server.mjs", "doctor"], {
+        ...common,
+        RELAY_UPSTREAM_BASE: "http://127.0.0.1:1",
+        RELAY_DATA_FILE: join(dataDir, "relay.json"),
+      });
+      check("doctor reports an unreachable upstream", deadUpstream.status === 1, `status=${deadUpstream.status}`);
+      check("doctor names the unreachable dependency", /catalog unreachable/.test(deadUpstream.stdout), deadUpstream.stdout.slice(0, 400));
     }
 
     // --- out-of-date CLI version -------------------------------------------

@@ -57,6 +57,9 @@ jobs:
         run: |
           docker run --rm cmdcd-relay:ci keygen | grep -Eq '^[A-Za-z0-9+/]{43}=$'
 
+      - name: Doctor subcommand
+        run: docker exec relay node src/server.mjs doctor
+
       - name: Cleanup
         if: always()
         run: docker rm -f relay || true

@@ -76,7 +76,7 @@ docker compose run --rm --no-deps relay keygen   # 填 RELAY_MASTER_KEY
 # 再设一个不同的 RELAY_ADMIN_PASSWORD
 ```
 
-### 健康检查
+### 健康检查与自检
 
 ```sh
 curl http://127.0.0.1:8317/health
@@ -84,6 +84,28 @@ curl http://127.0.0.1:8317/health
 ```
 
 Compose 里已配了 `HEALTHCHECK`，`docker compose ps` 会显示 `healthy`。
+
+部署后建议跑一次自检，它会逐项检查配置、数据文件、上游连通性、每个账号的凭据和余额、API Key 状态：
+
+```sh
+docker compose exec relay node src/server.mjs doctor
+```
+
+```
+cmdcd-relay doctor
+
+configuration
+  ok    RELAY_ADMIN_PASSWORD is set
+  ok    RELAY_MASTER_KEY decodes to 32 bytes
+  ...
+upstream
+  ok    model catalog reachable — 117 models
+accounts
+  ok    main: credential accepted — your-username
+  ok    main: credits — $4.50 (individual-go)
+```
+
+有 FAIL 时退出码为 1，可以直接串进部署脚本。它只读取状态，不会改账号或凭据。
 
 ### 不用 Docker（直接跑）
 
@@ -266,6 +288,7 @@ curl http://127.0.0.1:8317/v1/balance -H "Authorization: Bearer sk-cmd-..."
 | API 返回 503 `no_enabled_account` | 没有启用账号，去管理页启用 |
 | API 返回 503 `account_concurrency_limit` | 所有账号并发已满，调高 `RELAY_MAX_CONCURRENT` 或排队时间 |
 | 登录页授权后回调打不开 | 用「粘贴回调地址」方式，把地址栏完整 URL 提交 |
+| 不确定哪里出问题 | 跑 `docker compose exec relay node src/server.mjs doctor`，它会把配置、上游、账号、密钥逐项列出 |
 | 改了 `.env` 没生效 | `docker compose up -d --force-recreate`（`restart` 不会重读 env） |
 | 报「CLI 已过时」/ `upgrade_required` | 上游提高了最低 CLI 版本。错误信息里会给出要求版本，把 `.env` 的 `RELAY_CLI_VERSION` 改到不低于它，再 `docker compose up -d --force-recreate` |
 | 流式响应要等全部生成完才出字 | 反代开了缓冲。加 `proxy_buffering off;`（见「HTTPS / 反向代理」） |
@@ -275,6 +298,20 @@ curl http://127.0.0.1:8317/v1/balance -H "Authorization: Bearer sk-cmd-..."
 支持：OpenAI Chat Completions、OpenAI Responses、Anthropic Messages、SSE 流式、工具调用（三种协议各自的原生工具形状）、图片输入（`data:` URL）、思考档位、模型别名、账号多开、余额查询。
 
 不支持：托管工具（`web_search` 等由上游执行的工具）、音频、严格 JSON Schema 的 `response_format`、`/provider/v1/systemone` 决策模型。Anthropic 的 `thinking` 只在客户端显式请求时返回，且不带签名。
+
+## 命令行子命令
+
+镜像入口就是服务器本体，不带参数时启动服务；另有两个子命令：
+
+| 命令 | 用途 |
+| --- | --- |
+| `... keygen` | 打印一串 32 字节主密钥并退出。不读 `.env`、不连网 |
+| `... doctor` | 逐项自检配置、存储、上游、账号凭据、API Key，有 FAIL 时退出码 1 |
+
+```sh
+docker compose exec relay node src/server.mjs doctor
+docker compose run --rm --no-deps relay keygen
+```
 
 ## 上游变更时怎么跟
 
@@ -312,6 +349,8 @@ npm test
 | `test/run.mjs` | 起一个真实服务进程 + mock 上游，跑完整链路：鉴权、账号接入、模型目录与别名、三种协议的流式与非流式、工具调用与多轮回放、中途断流、错误透传、并发闸门、CORS 作用域、密钥生命周期、重启后持久化 |
 | `test/pool-unit.mjs` | 账号池失败策略：429 不停用、401 标记重认证、暂停账号被跳过且保留密钥、恢复后自动解除 |
 | `test/admin-harness.mjs` | 在最小 DOM 环境里执行管理页脚本，验证首屏与四个标签页都能渲染 |
+
+`test/run.mjs` 里还覆盖了 `keygen` 与 `doctor` 两个子命令（含上游不可达、主密钥错误等失败路径）。
 
 ## 验证记录
 

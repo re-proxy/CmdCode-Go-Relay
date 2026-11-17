@@ -36,18 +36,29 @@ import {
 import { adminRouter } from "./admin.mjs";
 import { createLoginBroker } from "./login.mjs";
 
-// `node src/server.mjs keygen` prints a fresh master key and exits, which is
-// how the container generates one without mounting a data volume first.
-if (process.argv[2] === "keygen") {
+// Subcommands run before config validation so they can help when config is the
+// problem.
+const subcommand = process.argv[2];
+
+// `keygen` prints a fresh master key and exits, so the container can generate
+// one without a data volume.
+if (subcommand === "keygen") {
   const { randomBytes } = await import("node:crypto");
   process.stdout.write(`${randomBytes(32).toString("base64")}\n`);
   process.exit(0);
+}
+
+// `doctor` diagnoses a deployment: config, storage, upstream, accounts, keys.
+if (subcommand === "doctor") {
+  const { doctor } = await import("./doctor.mjs");
+  process.exit(await doctor());
 }
 
 const problems = validateConfig();
 if (problems.length) {
   for (const problem of problems) console.error(`config: ${problem}`);
   console.error("Set the missing values in .env (see .env.example) and restart.");
+  console.error("Or run `node src/server.mjs doctor` after fixing them.");
   process.exit(1);
 }
 
